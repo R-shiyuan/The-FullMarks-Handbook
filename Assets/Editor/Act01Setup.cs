@@ -117,6 +117,115 @@ namespace University.EditorTools
             Debug.Log("[Act01] Screen material set: " + path);
         }
 
+        // ============================================================
+        //  玩家 Rig：第一幕只有视线自由度，没有位移（位移由后续剧情解锁）
+        // ============================================================
+        [MenuItem("Tools/Act01/Player/Setup Rig", false, 20)]
+        public static void SetupPlayerRig()
+        {
+            int group = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Act01 Setup Player Rig");
+
+            var cam = Camera.main;
+            if (cam == null)
+            {
+                Debug.LogError("[Act01] 找不到 tag 为 MainCamera 的相机。");
+                return;
+            }
+            var camGo = cam.gameObject;
+
+            // 相机如果已经在旧 Rig 里，先提到根级，否则跟着旧 Rig 一起被删掉
+            if (camGo.transform.parent != null)
+                Undo.SetTransformParent(camGo.transform, null, "Detach Camera");
+
+            var oldRig = GameObject.Find("PlayerRig");
+            if (oldRig != null) Undo.DestroyObjectImmediate(oldRig);
+            var oldPlaceholder = GameObject.Find("_Placeholder");
+            if (oldPlaceholder != null) Undo.DestroyObjectImmediate(oldPlaceholder);
+
+            // ---------- 台面占位 ----------
+            // 舞台被抬高了 0.6m（讲台底 0.60、主持人脚 0.70），但 Floor_Wood 顶面在 y=0，
+            // 也就是说台面网格缺失。这里补一块占位板，等美术给正式台面后替换掉。
+            var phRoot = new GameObject("_Placeholder");
+            Undo.RegisterCreatedObjectUndo(phRoot, "Create Placeholder");
+
+            var stageFloor = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            stageFloor.name = "Stage_Floor_Placeholder";
+            Undo.RegisterCreatedObjectUndo(stageFloor, "Create Stage Floor");
+            stageFloor.transform.SetParent(phRoot.transform, false);
+            // x: 房间内宽 ±6.1    z: 后墙 -2.4 到幕布 2.17    y: 0 到 0.6
+            stageFloor.transform.position = new Vector3(0f, 0.30f, -0.115f);
+            stageFloor.transform.localScale = new Vector3(12.2f, 0.6f, 4.57f);
+
+            var floorMat = EnsureMaterial("Assets/Art/Materials/M_Placeholder.mat",
+                new Color(0.16f, 0.13f, 0.11f), 0.75f);
+            if (floorMat != null) stageFloor.GetComponent<Renderer>().sharedMaterial = floorMat;
+
+            // ---------- 三层 Rig ----------
+            var root = new GameObject("PlayerRig");
+            Undo.RegisterCreatedObjectUndo(root, "Create PlayerRig");
+            // 舞台右侧幕后、幕布之前的空间中部。台面占位顶面 y=0.6。
+            root.transform.position = new Vector3(4.30f, 0.60f, 0.90f);
+
+            var yaw = new GameObject("Yaw");
+            Undo.RegisterCreatedObjectUndo(yaw, "Create Yaw");
+            yaw.transform.SetParent(root.transform, false);
+            yaw.transform.localPosition = Vector3.zero;
+            // 初始朝向：正对讲台（讲台中心约 (0, 1.4, -0.43)）。
+            // 屏幕中心在视野左侧约 10°，一抬头就能看到那块大屏。
+            yaw.transform.localRotation = Quaternion.Euler(0f, -107f, 0f);
+
+            var pitch = new GameObject("Pitch");
+            Undo.RegisterCreatedObjectUndo(pitch, "Create Pitch");
+            pitch.transform.SetParent(yaw.transform, false);
+            pitch.transform.localPosition = Vector3.zero;
+            pitch.transform.localRotation = Quaternion.identity;
+
+            // ---------- 相机挂到 Pitch 下 ----------
+            camGo.transform.SetParent(pitch.transform, false);
+            camGo.transform.localPosition = new Vector3(0f, 1.62f, 0f); // 眼高
+            camGo.transform.localRotation = Quaternion.identity;
+            cam.nearClipPlane = 0.05f;
+            cam.farClipPlane = 120f;
+            cam.fieldOfView = 62f;
+
+            // ---------- 挂视线脚本并接好引用 ----------
+            var look = root.AddComponent<University.Act01.FirstPersonLook>();
+            var so = new SerializedObject(look);
+            so.FindProperty("yawPivot").objectReferenceValue = yaw.transform;
+            so.FindProperty("pitchPivot").objectReferenceValue = pitch.transform;
+            so.ApplyModifiedPropertiesWithoutUndo();
+
+            Selection.activeGameObject = root;
+            Undo.CollapseUndoOperations(group);
+            EditorSceneMarkDirty();
+            Debug.Log("[Act01] Player rig placed at (4.30, 0.60, 0.90), yaw -107°.");
+        }
+
+        [MenuItem("Tools/Act01/Player/Hide Placeholder", false, 21)]
+        public static void TogglePlaceholder()
+        {
+            var ph = GameObject.Find("_Placeholder");
+            if (ph == null) { Debug.LogWarning("[Act01] 没有占位物体。"); return; }
+            Undo.RecordObject(ph, "Toggle Placeholder");
+            ph.SetActive(!ph.activeSelf);
+            EditorSceneMarkDirty();
+        }
+
+        static Material EnsureMaterial(string path, Color color, float smoothness)
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat != null) return mat;
+            var shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null) { Debug.LogError("[Act01] 找不到 URP/Lit。"); return null; }
+            mat = new Material(shader) { name = System.IO.Path.GetFileNameWithoutExtension(path) };
+            mat.SetColor("_BaseColor", color);
+            mat.SetFloat("_Smoothness", smoothness);
+            System.IO.Directory.CreateDirectory("Assets/Art/Materials");
+            AssetDatabase.CreateAsset(mat, path);
+            return mat;
+        }
+
         // ---------------- helpers ----------------
 
         static void MakePoint(GameObject parent, string name, Vector3 pos, Color color,
